@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Wage Tracker</title>
+    <meta name="description" content="Manage and track daily wage payouts for employees easily.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Ionicons -->
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <main class="app-container">
+        <header class="app-header">
+            <div class="header-info">
+                <h1 id="app-title">Wage Tracker</h1>
+                <p id="current-date" class="date-display">Loading date...</p>
+            </div>
+            <div class="header-stats">
+                <div class="stat-box">
+                    <span class="stat-label">Total Paid Today</span>
+                    <span id="total-paid" class="stat-value">฿0</span>
+                </div>
+            </div>
+        </header>
+
+        <section class="add-employee-section">
+            <form id="add-employee-form" class="glass-form">
+                <div class="input-group">
+                    <ion-icon name="person-outline"></ion-icon>
+                    <input type="text" id="emp-name" placeholder="Employee Name" required>
+                </div>
+                <div class="input-group">
+                    <ion-icon name="cash-outline"></ion-icon>
+                    <input type="number" id="emp-wage" placeholder="Daily Wage (฿)" min="1" required>
+                </div>
+                <button type="submit" class="btn-primary" aria-label="Add Employee">
+                    <ion-icon name="add-circle-outline"></ion-icon> Add
+                </button>
+            </form>
+        </section>
+
+        <section class="employee-list-section">
+            <div class="list-header">
+                <h2>Employees</h2>
+                <div class="list-actions">
+                    <button id="reset-day-btn" class="btn-secondary" title="Reset all payments for a new day">
+                        <ion-icon name="refresh-outline"></ion-icon> New Day
+                    </button>
+                </div>
+            </div>
+            <div id="employee-list" class="employee-list">
+                <!-- Employee items will be rendered here by JS -->
+                <div class="empty-state">
+                    <ion-icon name="people-outline"></ion-icon>
+                    <p>No employees found. Add one above.</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Toast Notification -->
+        <div id="toast-container" class="toast-container"></div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
