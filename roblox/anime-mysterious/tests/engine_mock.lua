@@ -15,12 +15,23 @@ vector.__add = function(a,b) return Vector3.new(a.X+b.X,a.Y+b.Y,a.Z+b.Z) end
 vector.__sub = function(a,b) return Vector3.new(a.X-b.X,a.Y-b.Y,a.Z-b.Z) end
 vector.__mul = function(a,b) return Vector3.new(a.X*b,a.Y*b,a.Z*b) end
 vector.__div = function(a,b) return Vector3.new(a.X/b,a.Y/b,a.Z/b) end
-CFrame = {lookAt = function(position) return {Position=position} end}
+-- Position-only CFrame model: tests validate lane simulation, not 3D rotation.
+local frame = {}
+frame.__index = frame
+local function makeFrame(position) return setmetatable({Position=position},frame) end
+frame.__mul = function(a,b) return makeFrame(a.Position+b.Position) end
+CFrame = {
+    lookAt = function(position) return makeFrame(position) end,
+    new = function(x,y,z)
+        return makeFrame(type(x)=="table" and x or Vector3.new(x or 0,y or 0,z or 0))
+    end,
+    Angles = function() return makeFrame(Vector3.new(0,0,0)) end,
+}
 Color3 = {new=function(...) return {...} end, fromRGB=function(...) return {...} end}
 UDim2 = {fromOffset=function(...) return {...} end, fromScale=function(...) return {...} end}
 local function enum() return setmetatable({}, {__index=function(self,key) local result=enum(); rawset(self,key,result); return result end}) end
 Enum = enum()
-Objects, Messages = {}, {}
+Objects, Messages, Effects = {}, {}, {}
 Instance = {new = function(class, parent)
     local obj = {ClassName=class, Parent=parent, attributes={}}
     function obj:SetAttribute(key,value) self.attributes[key]=value end
@@ -30,7 +41,7 @@ Instance = {new = function(class, parent)
     if class == "RemoteEvent" then
         obj.OnServerEvent = signal()
         function obj:FireClient(player,state) Messages[player.UserId] = state end
-        function obj:FireAllClients() end
+        function obj:FireAllClients(origin,target,kind) Effects[#Effects+1]={origin=origin,target=target,kind=kind} end
     end
     setmetatable(obj, {
         __newindex=function(self,key,value)

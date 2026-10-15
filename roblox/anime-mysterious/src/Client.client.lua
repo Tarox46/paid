@@ -9,7 +9,9 @@ local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local api = ReplicatedStorage:WaitForChild("MysteriousAPI")
 local action, stateEvent, fxEvent = api:WaitForChild("Action"), api:WaitForChild("State"), api:WaitForChild("FX")
 local world = workspace:WaitForChild("MysteriousWorld")
-local selectedKind, selectedTower = 1, nil
+local troopsFolder = world:WaitForChild("Troops")
+local selectedKind, selectedTroop = nil, nil
+local pendingSelect = false
 local latest, effects = nil, true
 local noticeVersion = 0
 local background = Color3.fromRGB(15, 22, 37)
@@ -85,7 +87,7 @@ rounded(healthFill, 4)
 local controls = panel(root, UDim2.fromOffset(220, 160), UDim2.new(1, -16, 0, 112))
 controls.AnchorPoint = Vector2.new(1, 0)
 local controlsScale = Instance.new("UIScale", controls)
-local phaseText = text(controls, "BUILD YOUR DEFENSE", UDim2.fromOffset(196, 25), UDim2.fromOffset(12, 9), accent, 13)
+local phaseText = text(controls, "ASSEMBLE YOUR SQUAD", UDim2.fromOffset(196, 25), UDim2.fromOffset(12, 9), accent, 13)
 local aliveText = text(controls, "0 enemies alive", UDim2.fromOffset(196, 24), UDim2.fromOffset(12, 34), muted, 13)
 local startButton = button(controls, "START WAVE  [SPACE]", UDim2.fromOffset(196, 36), UDim2.fromOffset(12, 66), function()
     action:FireServer(latest and (latest.phase == "VICTORY" or latest.phase == "DEFEAT") and "Restart" or "Start")
@@ -95,15 +97,33 @@ local fxButton = button(controls, "FX  ON", UDim2.fromOffset(94, 32), UDim2.from
     effects = not effects
 end, Color3.fromRGB(188, 205, 229))
 
-local detail = panel(root, UDim2.fromOffset(258, 216), UDim2.new(0, 16, 0, 112))
+local detail = panel(root, UDim2.fromOffset(258, 310), UDim2.new(0, 16, 0, 112))
 local detailScale = Instance.new("UIScale", detail)
-local detailTitle = text(detail, "YOUR FIRST DEFENSE", UDim2.fromOffset(230, 26), UDim2.fromOffset(14, 10), accent, 15)
-local detailBody = text(detail, "1  Choose a unit below\n2  Click a glowing numbered pad\n3  Start the wave\n\nClick a placed unit to upgrade.\nFrost slows. Astral hits groups.", UDim2.fromOffset(230, 126), UDim2.fromOffset(14, 39), muted, 14)
-local upgradeButton = button(detail, "UPGRADE", UDim2.fromOffset(144, 34), UDim2.fromOffset(12, 168), function()
-    if selectedTower then action:FireServer("Upgrade", selectedTower) end
+local detailTitle = text(detail, "YOUR MARCHING SQUAD", UDim2.fromOffset(230, 26), UDim2.fromOffset(14, 10), accent, 15)
+local squadText = text(detail, "NO CHARACTERS YET", UDim2.fromOffset(140, 30), UDim2.fromOffset(14, 42), muted, 12)
+local detailBody = text(detail, "", UDim2.fromOffset(230, 160), UDim2.fromOffset(14, 82), muted, 14)
+local function cycleSquad(direction)
+    if not latest then return end
+    local own = {}
+    local index = 0
+    for _, t in ipairs(latest.troops) do
+        if t.owner == player.UserId then
+            own[#own + 1] = t
+            if t.id == selectedTroop then index = #own end
+        end
+    end
+    if #own > 0 then
+        index = ((index - 1 + direction) % #own) + 1
+        selectedTroop, selectedKind = own[index].id, nil
+    end
+end
+button(detail, "<", UDim2.fromOffset(34, 30), UDim2.fromOffset(164, 42), function() cycleSquad(-1) end)
+button(detail, ">", UDim2.fromOffset(34, 30), UDim2.fromOffset(208, 42), function() cycleSquad(1) end)
+local upgradeButton = button(detail, "UPGRADE", UDim2.fromOffset(144, 34), UDim2.fromOffset(12, 262), function()
+    if selectedTroop then action:FireServer("Upgrade", selectedTroop) end
 end)
-local sellButton = button(detail, "SELL", UDim2.fromOffset(80, 34), UDim2.fromOffset(166, 168), function()
-    if selectedTower then action:FireServer("Sell", selectedTower) end
+local sellButton = button(detail, "SELL", UDim2.fromOffset(80, 34), UDim2.fromOffset(166, 262), function()
+    if selectedTroop then action:FireServer("Sell", selectedTroop) end
 end, Color3.fromRGB(255, 155, 144))
 upgradeButton.Visible, sellButton.Visible = false, false
 
@@ -116,17 +136,18 @@ local cards = {}
 for kind, unit in ipairs(Config.Units) do
     local color = Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])
     local b = button(dock, "", UDim2.fromOffset(214, 80), UDim2.fromOffset(14 + (kind - 1) * 224, 39), function()
-        selectedKind, selectedTower = kind, nil
+        selectedKind, pendingSelect = kind, true
+        action:FireServer("Recruit", kind)
     end, Color3.fromRGB(35, 46, 65))
     text(b, kind .. "  " .. unit.name, UDim2.fromOffset(194, 24), UDim2.fromOffset(10, 5), color, 15)
     text(b, unit.role, UDim2.fromOffset(194, 18), UDim2.fromOffset(10, 30), muted, 10)
-    local price = text(b, unit.cost .. " CREDITS", UDim2.fromOffset(194, 22), UDim2.fromOffset(10, 51), nil, 14)
+    local price = text(b, "RECRUIT  " .. unit.cost, UDim2.fromOffset(194, 22), UDim2.fromOffset(10, 51), nil, 14)
     local stroke = Instance.new("UIStroke", b)
     stroke.Color = color
     stroke.Thickness = 2
     cards[kind] = {button = b, stroke = stroke, price = price}
 end
-local notice = text(root, "Choose a unit, then click a numbered pad.  [Q] Cancel", UDim2.fromOffset(680, 42), UDim2.new(0.5, 0, 1, -159), Color3.new(1, 1, 1), 15)
+local notice = text(root, "Recruit a character below. Your squad marches from the base each wave.", UDim2.fromOffset(680, 42), UDim2.new(0.5, 0, 1, -159), Color3.new(1, 1, 1), 15)
 notice.AnchorPoint = Vector2.new(0.5, 1)
 notice.TextXAlignment = Enum.TextXAlignment.Center
 notice.TextStrokeTransparency = 0.3
@@ -136,7 +157,7 @@ local function notify(message)
     local version = noticeVersion
     notice.Text = message
     task.delay(4, function()
-        if version == noticeVersion then notice.Text = "Choose a unit, then click a numbered pad.  [Q] Cancel" end
+        if version == noticeVersion then notice.Text = "Recruit a character below. Your squad marches from the base each wave." end
     end)
 end
 
@@ -148,12 +169,9 @@ rangePart.CanCollide, rangePart.CanTouch, rangePart.CanQuery = false, false, fal
 rangePart.Material = Enum.Material.Neon
 rangePart.Transparency = 0.9
 rangePart.Color = accent
-local function towerInfo(id)
-    if latest then for _, t in ipairs(latest.towers) do if t.id == id then return t end end end
+local function troopInfo(id)
+    if latest then for _, t in ipairs(latest.troops) do if t.id == id then return t end end end
     return nil
-end
-local function padPart(padID)
-    return world.Pads:FindFirstChild("Pad_" .. padID)
 end
 local function showRange(position, radius, color)
     rangePart.Size = Vector3.new(0.1, radius * 2, radius * 2)
@@ -166,40 +184,32 @@ local function hitAt(position)
     local ray = camera:ScreenPointToRay(position.X, position.Y)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Include
-    params.FilterDescendantsInstances = {world.Pads, world.Towers}
+    params.FilterDescendantsInstances = {troopsFolder}
     return workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
 end
 local function clicked(position)
     local result = hitAt(position)
-    if not result then selectedTower = nil; return end
-    local hit = result.Instance
-    local model = hit:FindFirstAncestorOfClass("Model")
-    if model and model:GetAttribute("TowerID") then
-        selectedTower, selectedKind = model:GetAttribute("TowerID"), nil
-        return
+    if not result then return end
+    local model = result.Instance:FindFirstAncestorOfClass("Model")
+    if model and model:GetAttribute("TroopID") then
+        selectedTroop, selectedKind = model:GetAttribute("TroopID"), nil
     end
-    local padID = hit:GetAttribute("PadID")
-    if padID then
-        if latest then
-            for _, t in ipairs(latest.towers) do
-                if t.pad == padID then selectedTower, selectedKind = t.id, nil; return end
-            end
-        end
-        if selectedKind then action:FireServer("Place", padID, selectedKind)
-        else notify("Choose a unit card first.") end
-    end
+end
+local function recruit(kind)
+    selectedKind, pendingSelect = kind, true
+    action:FireServer("Recruit", kind)
 end
 local touchStart = nil
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.UserInputType == Enum.UserInputType.Touch then touchStart = input.Position end
     if input.UserInputType == Enum.UserInputType.MouseButton1 then clicked(input.Position) end
-    if input.KeyCode == Enum.KeyCode.One then selectedKind, selectedTower = 1, nil
-    elseif input.KeyCode == Enum.KeyCode.Two then selectedKind, selectedTower = 2, nil
-    elseif input.KeyCode == Enum.KeyCode.Three then selectedKind, selectedTower = 3, nil
-    elseif input.KeyCode == Enum.KeyCode.Q then selectedKind, selectedTower = nil, nil
-    elseif input.KeyCode == Enum.KeyCode.E and selectedTower then action:FireServer("Upgrade", selectedTower)
-    elseif input.KeyCode == Enum.KeyCode.X and selectedTower then action:FireServer("Sell", selectedTower)
+    if input.KeyCode == Enum.KeyCode.One then recruit(1)
+    elseif input.KeyCode == Enum.KeyCode.Two then recruit(2)
+    elseif input.KeyCode == Enum.KeyCode.Three then recruit(3)
+    elseif input.KeyCode == Enum.KeyCode.Q then selectedKind, selectedTroop, pendingSelect = nil, nil, false
+    elseif input.KeyCode == Enum.KeyCode.E and selectedTroop then action:FireServer("Upgrade", selectedTroop)
+    elseif input.KeyCode == Enum.KeyCode.X and selectedTroop then action:FireServer("Sell", selectedTroop)
     elseif input.KeyCode == Enum.KeyCode.Space then action:FireServer("Start") end
 end)
 UserInputService.InputEnded:Connect(function(input, processed)
@@ -211,7 +221,14 @@ end)
 stateEvent.OnClientEvent:Connect(function(state)
     if state.notice then notify(state.notice); return end
     latest = state
-    if selectedTower and not towerInfo(selectedTower) then selectedTower = nil end
+    if pendingSelect then
+        for i = #latest.troops, 1, -1 do
+            local t = latest.troops[i]
+            if t.owner == player.UserId and t.kind == selectedKind then selectedTroop = t.id; break end
+        end
+        pendingSelect = false
+    end
+    if selectedTroop and not troopInfo(selectedTroop) then selectedTroop = nil end
 end)
 fxEvent.OnClientEvent:Connect(function(origin, target, kind)
     if not effects then return end
@@ -221,7 +238,7 @@ fxEvent.OnClientEvent:Connect(function(origin, target, kind)
     beam.Anchored = true
     beam.CanCollide, beam.CanTouch, beam.CanQuery = false, false, false
     beam.Material = Enum.Material.Neon
-    beam.Color = Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])
+    beam.Color = unit and Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3]) or Color3.fromRGB(255, 100, 128)
     beam.Size = Vector3.new(0.18, 0.18, (target - origin).Magnitude)
     beam.CFrame = CFrame.lookAt((origin + target) / 2, target)
     beam.Parent = workspace
@@ -247,29 +264,26 @@ RunService.RenderStepped:Connect(function()
     local focus = Vector3.new(0, 0, 0)
     camera.CFrame = CFrame.lookAt(focus + Vector3.new(0, distance, distance * 0.72), focus)
     rangePart.Parent = nil
-    local chosen = towerInfo(selectedTower)
+    local chosen = troopInfo(selectedTroop)
+    local ownCount = 0
+    if latest then for _, t in ipairs(latest.troops) do if t.owner == player.UserId then ownCount = ownCount + 1 end end end
+    squadText.Text = "MY SQUAD  " .. ownCount .. " / " .. Config.MaxTroops
     if chosen then
-        local p = padPart(chosen.pad)
+        local model = troopsFolder:FindFirstChild("Troop_" .. chosen.id)
+        local body = model and model:FindFirstChild("Body")
         local unit = Config.Units[chosen.kind]
         local stats = Config.stats(chosen.kind, chosen.level)
-        if p then showRange(p.Position, stats.range, Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])) end
+        if body and chosen.hp > 0 then showRange(body.Position, stats.range, Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])) end
         detailTitle.Text = unit.name .. " / Lv." .. chosen.level
-        detailBody.Text = string.format("DAMAGE  %d      RANGE  %d\nINTERVAL  %.1fs\n%s\n\n%s", stats.damage, stats.range, stats.cooldown, unit.role, chosen.owner == player.UserId and "[E] Upgrade     [X] Sell (70%)" or "Owned by another player")
+        detailBody.Text = string.format("HP  %d / %d    |    %s\nDAMAGE  %d     RANGE  %d\nATTACK  %.1fs     SPEED  %d\n%s\n\n%s", math.ceil(chosen.hp), chosen.maxHp, chosen.status, stats.damage, stats.range, stats.cooldown, stats.speed, unit.role, chosen.hp <= 0 and "Returns from base next wave." or "Walks from our base. Fights on contact.")
         local owns = chosen.owner == player.UserId
         upgradeButton.Visible, sellButton.Visible = owns, owns
         upgradeButton.Text = stats.upgradeCost and ("UPGRADE  " .. stats.upgradeCost) or "MAX LEVEL"
         sellButton.Text = "SELL " .. math.floor(Config.invested(chosen.kind, chosen.level) * Config.SellRatio)
     else
         upgradeButton.Visible, sellButton.Visible = false, false
-        detailTitle.Text = selectedKind and Config.Units[selectedKind].name or "YOUR DEFENSE"
-        detailBody.Text = "1  Choose a unit below\n2  Click a glowing numbered pad\n3  Start the wave\n\nFrost slows. Astral hits groups.\nUpgrade units for more damage."
-        if selectedKind and UserInputService.MouseEnabled then
-            local result = hitAt(UserInputService:GetMouseLocation())
-            if result and result.Instance:GetAttribute("PadID") then
-                local u = Config.Units[selectedKind]
-                showRange(result.Instance.Position, u.range, Color3.fromRGB(u.color[1], u.color[2], u.color[3]))
-            end
-        end
+        detailTitle.Text = "YOUR MARCHING SQUAD"
+        detailBody.Text = "1  Recruit with a card below\n2  Start the wave\n3  Your characters march out!\n\nBoth sides take damage.\nFallen allies return next wave.\n\nClick a fighter or use < > to manage your squad."
     end
     for kind, card in ipairs(cards) do
         card.stroke.Transparency = selectedKind == kind and 0 or 0.85
@@ -283,12 +297,12 @@ RunService.RenderStepped:Connect(function()
     healthFill.Size = UDim2.fromScale(latest.health / Config.BaseHealth, 1)
     healthFill.BackgroundColor3 = latest.health > 30 and accent or Color3.fromRGB(255, 110, 123)
     local count = 0
-    for _, t in ipairs(latest.towers) do if t.owner == player.UserId then count = count + 1 end end
-    capText.Text = count .. " / " .. Config.MaxTowers .. " UNITS"
-    aliveText.Text = latest.alive .. " enemies alive"
+    for _, t in ipairs(latest.troops) do if t.owner == player.UserId then count = count + 1 end end
+    capText.Text = count .. " / " .. Config.MaxTroops .. " UNITS"
+    aliveText.Text = latest.allies .. " allies / " .. latest.alive .. " enemies"
     speedButton.Text = "SPEED  x" .. latest.speed
     local phase = latest.phase
-    phaseText.Text = phase == "BUILD" and "BUILD YOUR DEFENSE" or phase == "BREAK" and ("NEXT WAVE IN " .. latest.countdown .. "s") or phase == "VICTORY" and "VICTORY / SHRINE SAVED" or phase == "DEFEAT" and "DEFEAT / TRY A NEW PLAN" or "DEFEND THE SHRINE"
+    phaseText.Text = phase == "BUILD" and "ASSEMBLE YOUR SQUAD" or phase == "BREAK" and ("NEXT WAVE IN " .. latest.countdown .. "s") or phase == "VICTORY" and "VICTORY / SHRINE SAVED" or phase == "DEFEAT" and "DEFEAT / TRY A NEW PLAN" or "SQUAD IN BATTLE"
     startButton.Text = (phase == "VICTORY" or phase == "DEFEAT") and string.format("REPLAY VOTE  %d / %d", latest.votes, latest.players) or phase == "WAVE" and "WAVE IN PROGRESS" or phase == "BREAK" and "NEXT WAVE NOW" or "START WAVE  [SPACE]"
     startButton.BackgroundColor3 = phase == "WAVE" and muted or accent
 end)

@@ -21,7 +21,7 @@ run(`
 for kind, unit in ipairs(TestConfig.Units) do
  for level=1,4 do
   local stats=TestConfig.stats(kind,level)
-  assert(stats.damage>0 and stats.range>0 and stats.cooldown>0)
+  assert(stats.damage>0 and stats.range>0 and stats.cooldown>0 and stats.health>0 and stats.speed>0)
   assert(TestConfig.invested(kind,level)>=unit.cost)
   if level<4 then assert(stats.upgradeCost>0) else assert(stats.upgradeCost==nil) end
  end
@@ -37,16 +37,18 @@ run(fs.readFileSync(path.join(__dirname,'engine_mock.lua'),'utf8'),'mock service
 run(fs.readFileSync(path.join(root,'src/Server.server.lua'),'utf8'),'server');
 run(fs.readFileSync(path.join(__dirname,'server_rules.lua'),'utf8'),'server rules');
 l.lua_close(L);
-const balance = aux.luaL_newstate();
-lib.luaL_openlibs(balance);
-for (const [name, source] of [
-  ['Config', 'TestConfig = (function()\n'+config+'\nend)()'],
-  ['mock services', fs.readFileSync(path.join(__dirname,'engine_mock.lua'),'utf8')],
-  ['server', fs.readFileSync(path.join(root,'src/Server.server.lua'),'utf8')],
-  ['solo balance', fs.readFileSync(path.join(__dirname,'balance_simulation.lua'),'utf8')]
-]) {
-  if (aux.luaL_loadbuffer(balance,str(source),null,str(name)) !== l.LUA_OK || l.lua_pcall(balance,0,0,0) !== l.LUA_OK) {
-    throw new Error(js(l.lua_tostring(balance,-1)));
-  }
+for (const test of ['combat_rules.lua','balance_simulation.lua']) {
+ const context = aux.luaL_newstate();
+ lib.luaL_openlibs(context);
+ for (const [name, source] of [
+   ['Config', 'TestConfig = (function()\n'+config+'\nend)()'],
+   ['mock services', fs.readFileSync(path.join(__dirname,'engine_mock.lua'),'utf8')],
+   ['server', fs.readFileSync(path.join(root,'src/Server.server.lua'),'utf8')],
+   [test, fs.readFileSync(path.join(__dirname,test),'utf8')]
+ ]) {
+   if (aux.luaL_loadbuffer(context,str(source),null,str(name)) !== l.LUA_OK || l.lua_pcall(context,0,0,0) !== l.LUA_OK) {
+     throw new Error(js(l.lua_tostring(context,-1)));
+   }
+ }
+ l.lua_close(context);
 }
-l.lua_close(balance);

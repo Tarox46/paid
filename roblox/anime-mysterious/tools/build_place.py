@@ -1,6 +1,7 @@
 """Package the source as a Roblox XML place; no external dependencies required."""
 from pathlib import Path
 import xml.etree.ElementTree as ET
+from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
 roblox = ET.Element('roblox', {'version': '4'})
@@ -45,3 +46,16 @@ for node, source in zip(sources, ['Config.lua', 'Server.server.lua', 'Client.cli
 assert parsed.find(".//Item[@class='StarterPlayerScripts']/Item[@class='LocalScript']") is not None
 assert parsed.find(".//Item[@class='ServerScriptService']/Item[@class='Script']") is not None
 print(f'Built and XML/source-checked: {output} ({output.stat().st_size:,} bytes)')
+
+# Keep the downloadable ZIP synchronized with the shipped source and place.
+archive = ROOT.parent / 'AnimeMysterious.zip'
+files = [p for p in sorted(ROOT.rglob('*')) if p.is_file() and '__pycache__' not in p.parts]
+with ZipFile(archive, 'w', ZIP_DEFLATED) as zipped:
+    for source in files:
+        zipped.write(source, Path(ROOT.name) / source.relative_to(ROOT))
+with ZipFile(archive) as zipped:
+    assert zipped.testzip() is None
+    for source in files:
+        key = (Path(ROOT.name) / source.relative_to(ROOT)).as_posix()
+        assert zipped.read(key) == source.read_bytes(), key
+print(f'Archive contents verified: {archive} ({len(files)} files)')
