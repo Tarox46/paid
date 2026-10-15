@@ -1,0 +1,32 @@
+{
+  "name": "Anime Mysterious",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Config": {
+        "$path": "src/Config.lua"
+      }
+    },
+    "ServerScriptService": {
+      "GameServer": {
+        "$path": "src/Server.server.lua"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "GameClient": {
+          "$path": "src/Client.client.lua"
+        }
+      },
+      "$properties": {
+        "CharacterWalkSpeed": 0,
+        "CharacterJumpPower": 0
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      }
+    }
+  }
+}

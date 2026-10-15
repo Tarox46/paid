@@ -1,0 +1,755 @@
+<?xml version='1.0' encoding='utf-8'?>
+<roblox version="4">
+  <External>null</External>
+  <External>nil</External>
+  <Item class="Workspace" referent="RBX1">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="FilteringEnabled">true</bool>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="RBX2">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="ModuleScript" referent="RBX3">
+      <Properties>
+        <string name="Name">Config</string>
+        <ProtectedString name="Source">local Config = {}
+Config.StartingCash = 900
+Config.BaseHealth = 100
+Config.MaxTowers = 12
+Config.MaxWaves = 8
+Config.SellRatio = 0.7
+Config.Units = {
+    { name = "Ember Ronin", role = "FAST / SINGLE TARGET", cost = 300, damage = 18, range = 24, cooldown = 0.7, color = {255, 123, 79} },
+    { name = "Frost Oracle", role = "SLOW / CROWD CONTROL", cost = 400, damage = 12, range = 28, cooldown = 1.2, slow = 0.5, color = {92, 217, 255} },
+    { name = "Astral Warden", role = "SPLASH / AREA DAMAGE", cost = 550, damage = 40, range = 32, cooldown = 2.2, splash = 10, color = {186, 140, 255} },
+}
+function Config.stats(kind, level)
+    local unit = Config.Units[kind]
+    if not unit or level &lt; 1 or level &gt; 4 then return nil end
+    return {
+        damage = math.floor(unit.damage * (1 + (level - 1) * 0.65)),
+        range = unit.range + (level - 1) * 3,
+        cooldown = unit.cooldown,
+        upgradeCost = level &lt; 4 and math.floor(unit.cost * (0.7 + level * 0.45)) or nil,
+    }
+end
+function Config.invested(kind, level)
+    local total = Config.Units[kind].cost
+    for previous = 1, level - 1 do total = total + Config.stats(kind, previous).upgradeCost end
+    return total
+end
+function Config.wave(index)
+    return {
+        count = 6 + index * 2,
+        health = math.floor(45 * 1.32 ^ (index - 1)),
+        speed = 9 + index * 0.6,
+        reward = 22 + index * 3,
+        clearReward = 100 + index * 35,
+        boss = index == Config.MaxWaves,
+    }
+end
+function Config.validInteger(value, minimum, maximum)
+    return type(value) == "number" and value == value and value % 1 == 0 and value &gt;= minimum and value &lt;= maximum
+end
+return Config
+</ProtectedString>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="RBX4">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Script" referent="RBX5">
+      <Properties>
+        <string name="Name">GameServer</string>
+        <ProtectedString name="Source">local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Config = require(ReplicatedStorage:WaitForChild("Config"))
+
+local api = Instance.new("Folder")
+api.Name = "MysteriousAPI"
+api.Parent = ReplicatedStorage
+local action = Instance.new("RemoteEvent", api)
+action.Name = "Action"
+local stateEvent = Instance.new("RemoteEvent", api)
+stateEvent.Name = "State"
+local fxEvent = Instance.new("RemoteEvent", api)
+fxEvent.Name = "FX"
+
+local world = Instance.new("Folder", workspace)
+world.Name = "MysteriousWorld"
+local padsFolder = Instance.new("Folder", world)
+padsFolder.Name = "Pads"
+local towersFolder = Instance.new("Folder", world)
+towersFolder.Name = "Towers"
+local enemiesFolder = Instance.new("Folder", world)
+enemiesFolder.Name = "Enemies"
+local path = {
+    Vector3.new(-72, 1, -42), Vector3.new(-38, 1, -42), Vector3.new(-38, 1, 8),
+    Vector3.new(0, 1, 8), Vector3.new(0, 1, -30), Vector3.new(38, 1, -30),
+    Vector3.new(38, 1, 35), Vector3.new(72, 1, 35),
+}
+local pads = {}
+local towers = {}
+local enemies = {}
+local wallets = {}
+local lastRequests = {}
+local replayVotes = {}
+local match = {wave = 0, health = Config.BaseHealth, phase = "BUILD", speed = 1, countdown = 0}
+local nextTowerID, nextEnemyID = 0, 0
+local spawnRemaining, spawnClock, intermission = 0, 0, 0
+local syncClock = 0
+
+local function part(name, size, position, color, parent, material)
+    local p = Instance.new("Part")
+    p.Name = name
+    p.Size = size
+    p.Position = position
+    p.Color = color
+    p.Anchored = true
+    p.TopSurface = Enum.SurfaceType.Smooth
+    p.BottomSurface = Enum.SurfaceType.Smooth
+    p.Material = material or Enum.Material.SmoothPlastic
+    p.Parent = parent or world
+    return p
+end
+local function label(adornee, text, color, height)
+    local gui = Instance.new("BillboardGui", adornee)
+    gui.Size = UDim2.fromOffset(170, 42)
+    gui.StudsOffset = Vector3.new(0, height or 4, 0)
+    gui.AlwaysOnTop = true
+    gui.MaxDistance = 180
+    local textLabel = Instance.new("TextLabel", gui)
+    textLabel.Size = UDim2.fromScale(1, 1)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextSize = 13
+    textLabel.TextColor3 = color or Color3.new(1, 1, 1)
+    textLabel.TextStrokeTransparency = 0.4
+    textLabel.Text = text
+    return textLabel
+end
+
+Lighting.ClockTime = 17.5
+Lighting.Brightness = 2
+Lighting.Ambient = Color3.fromRGB(120, 130, 160)
+part("Valley", Vector3.new(174, 2, 116), Vector3.new(0, -1, 0), Color3.fromRGB(40, 66, 64), world, Enum.Material.Grass)
+for i = 1, #path - 1 do
+    local a, b = path[i], path[i + 1]
+    local lane = part("EnemyPath", Vector3.new(10, 0.3, (b - a).Magnitude + 9), (a + b) / 2, Color3.fromRGB(122, 112, 99), world, Enum.Material.Cobblestone)
+    lane.CFrame = CFrame.lookAt((a + b) / 2, b)
+end
+local positions = {
+    {-58,-30}, {-50,-52}, {-26,-23}, {-50,0}, {-23,20}, {-12,-6},
+    {12,-18}, {-12,-36}, {20,-42}, {26,-10}, {50,0}, {26,21}, {50,33}, {62,47},
+}
+for id, xy in ipairs(positions) do
+    local p = part("Pad_" .. id, Vector3.new(9, 0.6, 9), Vector3.new(xy[1], 1.1, xy[2]), Color3.fromRGB(66, 113, 115), padsFolder, Enum.Material.Slate)
+    p:SetAttribute("PadID", id)
+    label(p, string.format("%02d  +", id), Color3.fromRGB(147, 240, 218), 1)
+    pads[id] = {part = p, towerID = nil}
+end
+local portal = part("RiftPortal", Vector3.new(2, 15, 14), path[1] + Vector3.new(-3, 6, 0), Color3.fromRGB(177, 90, 255), world, Enum.Material.Neon)
+portal.CanCollide = false
+label(portal, "THE RIFT / ENEMY SPAWN", Color3.fromRGB(221, 193, 255), 9)
+local core = part("ShrineCore", Vector3.new(7, 12, 7), path[#path] + Vector3.new(0, 5, 0), Color3.fromRGB(91, 239, 208), world, Enum.Material.Neon)
+label(core, "PROTECT THE SHRINE", Color3.fromRGB(159, 255, 229), 9)
+local spawn = Instance.new("SpawnLocation", world)
+spawn.Name = "PlayerSpawn"
+spawn.Size = Vector3.new(8, 1, 8)
+spawn.Position = Vector3.new(0, 2, 43)
+spawn.Anchored = true
+spawn.Neutral = true
+spawn.Transparency = 1
+spawn.Duration = 0
+-- Original, asset-free lantern village: the entire map works offline.
+for _, x in ipairs({-72, -20, 20, 70}) do
+    for _, z in ipairs({-53, 53}) do
+        local building = part("VillageHouse", Vector3.new(16, 11, 10), Vector3.new(x, 5, z), Color3.fromRGB(205, 186, 151))
+        part("Roof", Vector3.new(20, 2, 14), building.Position + Vector3.new(0, 6, 0), Color3.fromRGB(44, 52, 76))
+        part("Door", Vector3.new(4, 7, 0.3), building.Position + Vector3.new(0, -1, z &gt; 0 and -5.2 or 5.2), Color3.fromRGB(77, 54, 48))
+    end
+end
+for _, xy in ipairs({{-62,18}, {-20,38}, {18,40}, {62,-18}}) do
+    part("LanternPost", Vector3.new(1, 7, 1), Vector3.new(xy[1], 3, xy[2]), Color3.fromRGB(73, 58, 51))
+    local lantern = part("Lantern", Vector3.new(2.5, 3, 2.5), Vector3.new(xy[1], 7, xy[2]), Color3.fromRGB(255, 199, 112), world, Enum.Material.Neon)
+    local light = Instance.new("PointLight", lantern)
+    light.Color = lantern.Color
+    light.Range = 18
+    light.Brightness = 1
+end
+
+local function tell(player, message)
+    stateEvent:FireClient(player, {notice = message})
+end
+local function towerCount(owner)
+    local n = 0
+    for _, t in pairs(towers) do if t.owner == owner then n = n + 1 end end
+    return n
+end
+local function snapshot(player)
+    local list = {}
+    for id, t in pairs(towers) do
+        list[#list + 1] = {id = id, kind = t.kind, level = t.level, pad = t.pad, owner = t.owner}
+    end
+    local alive = 0
+    for _ in pairs(enemies) do alive = alive + 1 end
+    local votes = 0
+    for _ in pairs(replayVotes) do votes = votes + 1 end
+    return {wave = match.wave, health = match.health, phase = match.phase, speed = match.speed,
+        cash = wallets[player.UserId] or Config.StartingCash, towers = list, alive = alive,
+        countdown = math.ceil(match.countdown), votes = votes, players = #Players:GetPlayers()}
+end
+local function broadcast()
+    for _, player in ipairs(Players:GetPlayers()) do stateEvent:FireClient(player, snapshot(player)) end
+end
+local function payout(amount)
+    for id, cash in pairs(wallets) do wallets[id] = cash + amount end
+end
+local function removeEnemy(id)
+    local e = enemies[id]
+    if e then e.part:Destroy(); enemies[id] = nil end
+end
+local function clearBattle()
+    for id in pairs(enemies) do removeEnemy(id) end
+    for id, t in pairs(towers) do
+        t.model:Destroy()
+        pads[t.pad].towerID = nil
+        towers[id] = nil
+    end
+    for _, pad in ipairs(pads) do pad.part.Color = Color3.fromRGB(66, 113, 115) end
+    for id in pairs(wallets) do wallets[id] = Config.StartingCash end
+    match = {wave = 0, health = Config.BaseHealth, phase = "BUILD", speed = 1, countdown = 0}
+    spawnRemaining, intermission = 0, 0
+    replayVotes = {}
+end
+local function startWave()
+    match.wave = match.wave + 1
+    match.phase = "WAVE"
+    match.countdown = 0
+    spawnRemaining = Config.wave(match.wave).count
+    spawnClock = 0
+    broadcast()
+end
+local function spawnEnemy()
+    local settings = Config.wave(match.wave)
+    local boss = settings.boss and spawnRemaining == 1
+    local runner = not boss and spawnRemaining % 4 == 0
+    nextEnemyID = nextEnemyID + 1
+    local size = boss and 7 or 3
+    local p = part(boss and "Rift Sovereign" or runner and "Rift Runner" or "Rift Shade", Vector3.new(size, size, size), path[1] + Vector3.new(0, size / 2, 0), boss and Color3.fromRGB(248, 73, 136) or runner and Color3.fromRGB(255, 176, 91) or Color3.fromRGB(141, 103, 182), enemiesFolder, Enum.Material.Neon)
+    p.CanCollide = false
+    local hp = math.floor(settings.health * (boss and 10 or runner and 0.65 or 1))
+    local text = label(p, p.Name .. "\n" .. hp .. " HP", nil, size / 2 + 2)
+    enemies[nextEnemyID] = {part = p, hp = hp, maxHp = hp, segment = 1, progress = 0,
+        speed = settings.speed * (boss and 0.65 or runner and 1.7 or 1), reward = settings.reward * (boss and 8 or 1),
+        slowUntil = 0, leak = boss and 30 or 8, text = text, boss = boss}
+end
+local function damageEnemy(id, damage, slow)
+    local e = enemies[id]
+    if not e then return end
+    e.hp = e.hp - damage
+    if slow then e.slowUntil = 1.8 end
+    if e.hp &lt;= 0 then
+        payout(e.reward)
+        removeEnemy(id)
+    else
+        e.text.Text = e.part.Name .. "\n" .. e.hp .. " / " .. e.maxHp
+    end
+end
+local function makeTower(player, kind, padID)
+    nextTowerID = nextTowerID + 1
+    local id = nextTowerID
+    local model = Instance.new("Model", towersFolder)
+    model.Name = "Tower_" .. id
+    model:SetAttribute("TowerID", id)
+    local unit = Config.Units[kind]
+    local c = Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])
+    local position = pads[padID].part.Position
+    local body = part("Body", Vector3.new(3, 4, 2), position + Vector3.new(0, 2.6, 0), c, model)
+    local head = part("Head", Vector3.new(2.2, 2.2, 2.2), position + Vector3.new(0, 5.6, 0), Color3.fromRGB(242, 216, 189), model)
+    part("Hair", Vector3.new(2.5, 1, 2.5), head.Position + Vector3.new(0, 1, 0), c, model, Enum.Material.Neon)
+    local weapon = part("SpiritBlade", Vector3.new(0.5, 6, 0.6), position + Vector3.new(2, 4, 0), c, model, Enum.Material.Neon)
+    weapon.CanCollide = false
+    model.PrimaryPart = body
+    local text = label(head, unit.name .. " / Lv.1", c, 3)
+    towers[id] = {model = model, body = body, kind = kind, level = 1, owner = player.UserId, pad = padID, cooldown = 0, text = text}
+    pads[padID].towerID = id
+    pads[padID].part.Color = c
+end
+
+Players.PlayerAdded:Connect(function(player)
+    wallets[player.UserId] = Config.StartingCash
+end)
+Players.PlayerRemoving:Connect(function(player)
+    wallets[player.UserId] = nil
+    lastRequests[player.UserId] = nil
+    replayVotes[player.UserId] = nil
+    for id, t in pairs(towers) do
+        if t.owner == player.UserId then
+            t.model:Destroy()
+            pads[t.pad].towerID = nil
+            pads[t.pad].part.Color = Color3.fromRGB(66, 113, 115)
+            towers[id] = nil
+        end
+    end
+    if #Players:GetPlayers() == 0 then clearBattle() end
+end)
+for _, player in ipairs(Players:GetPlayers()) do wallets[player.UserId] = Config.StartingCash end
+
+action.OnServerEvent:Connect(function(player, command, arg, kind)
+    local now = os.clock()
+    if now - (lastRequests[player.UserId] or -1) &lt; 0.12 then return end
+    lastRequests[player.UserId] = now
+    if command == "Sync" then stateEvent:FireClient(player, snapshot(player)); return end
+    if command == "Restart" then
+        if match.phase ~= "VICTORY" and match.phase ~= "DEFEAT" then return end
+        replayVotes[player.UserId] = true
+        for _, p in ipairs(Players:GetPlayers()) do
+            if not replayVotes[p.UserId] then broadcast(); return end
+        end
+        clearBattle(); broadcast(); return
+    end
+    if match.phase == "VICTORY" or match.phase == "DEFEAT" then return end
+    if command == "Start" then
+        if match.phase == "BUILD" or match.phase == "BREAK" then startWave() end
+    elseif command == "Speed" then
+        -- Shared speed changes require the first active player (the session host).
+        if Players:GetPlayers()[1] ~= player then tell(player, "Only the host controls match speed."); return end
+        match.speed = match.speed == 1 and 2 or 1
+    elseif command == "Place" then
+        if not Config.validInteger(arg, 1, #pads) or not Config.validInteger(kind, 1, #Config.Units) then return end
+        if pads[arg].towerID then tell(player, "This pad is occupied."); return end
+        if towerCount(player.UserId) &gt;= Config.MaxTowers then tell(player, "Unit limit reached (12)."); return end
+        if wallets[player.UserId] &lt; Config.Units[kind].cost then tell(player, "Not enough credits."); return end
+        wallets[player.UserId] = wallets[player.UserId] - Config.Units[kind].cost
+        makeTower(player, kind, arg)
+    elseif command == "Upgrade" or command == "Sell" then
+        if not Config.validInteger(arg, 1, nextTowerID) then return end
+        local t = towers[arg]
+        if not t or t.owner ~= player.UserId then tell(player, "Select one of your own units."); return end
+        if command == "Upgrade" then
+            local cost = Config.stats(t.kind, t.level).upgradeCost
+            if not cost then tell(player, "Maximum level reached."); return end
+            if wallets[player.UserId] &lt; cost then tell(player, "Not enough credits."); return end
+            wallets[player.UserId] = wallets[player.UserId] - cost
+            t.level = t.level + 1
+            t.text.Text = Config.Units[t.kind].name .. " / Lv." .. t.level
+        else
+            wallets[player.UserId] = wallets[player.UserId] + math.floor(Config.invested(t.kind, t.level) * Config.SellRatio)
+            pads[t.pad].towerID = nil
+            pads[t.pad].part.Color = Color3.fromRGB(66, 113, 115)
+            t.model:Destroy()
+            towers[arg] = nil
+        end
+    else return end
+    broadcast()
+end)
+
+RunService.Heartbeat:Connect(function(delta)
+    local dt = math.min(delta, 0.15) * match.speed
+    if match.phase == "BREAK" then
+        intermission = intermission - dt
+        match.countdown = math.max(0, intermission)
+        if intermission &lt;= 0 then startWave() end
+    elseif match.phase == "WAVE" then
+        spawnClock = spawnClock - dt
+        if spawnRemaining &gt; 0 and spawnClock &lt;= 0 then
+            spawnEnemy()
+            spawnRemaining = spawnRemaining - 1
+            spawnClock = 0.9
+        end
+        for id, e in pairs(enemies) do
+            e.slowUntil = math.max(0, e.slowUntil - dt)
+            local travel = e.speed * (e.slowUntil &gt; 0 and 0.5 or 1) * dt
+            local leaked = false
+            while travel &gt; 0 do
+                local a, b = path[e.segment], path[e.segment + 1]
+                if not b then leaked = true; break end
+                local length = (b - a).Magnitude
+                local step = math.min(travel, length - e.progress)
+                e.progress = e.progress + step
+                travel = travel - step
+                local pos = a:Lerp(b, e.progress / length) + Vector3.new(0, e.part.Size.Y / 2, 0)
+                e.part.CFrame = CFrame.lookAt(pos, pos + (b - a))
+                if e.progress &gt;= length then e.segment = e.segment + 1; e.progress = 0 end
+                if e.segment &gt;= #path then leaked = true; break end
+            end
+            if leaked then
+                match.health = math.max(0, match.health - e.leak)
+                removeEnemy(id)
+            end
+        end
+        if match.health &lt;= 0 then
+            match.phase = "DEFEAT"
+            for id in pairs(enemies) do removeEnemy(id) end
+            spawnRemaining = 0
+            broadcast()
+            return
+        end
+        for _, t in pairs(towers) do
+            t.cooldown = math.max(0, t.cooldown - dt)
+            if t.cooldown &lt;= 0 then
+                local stats = Config.stats(t.kind, t.level)
+                local targetID, furthest = nil, -1
+                for id, e in pairs(enemies) do
+                    local progress = e.segment * 1000 + e.progress
+                    if (e.part.Position - t.body.Position).Magnitude &lt;= stats.range and progress &gt; furthest then
+                        targetID, furthest = id, progress
+                    end
+                end
+                if targetID then
+                    local targetPosition = enemies[targetID].part.Position
+                    local unit = Config.Units[t.kind]
+                    fxEvent:FireAllClients(t.body.Position + Vector3.new(0, 2, 0), targetPosition, t.kind)
+                    if unit.splash then
+                        local hits = {}
+                        for id, e in pairs(enemies) do
+                            if (e.part.Position - targetPosition).Magnitude &lt;= unit.splash then hits[#hits + 1] = id end
+                        end
+                        for _, id in ipairs(hits) do damageEnemy(id, stats.damage) end
+                    else damageEnemy(targetID, stats.damage, unit.slow) end
+                    t.cooldown = stats.cooldown
+                end
+            end
+        end
+        if spawnRemaining == 0 and next(enemies) == nil then
+            payout(Config.wave(match.wave).clearReward)
+            if match.wave == Config.MaxWaves then match.phase = "VICTORY"
+            else match.phase = "BREAK"; intermission = 12; match.countdown = 12 end
+            broadcast()
+        end
+    end
+    syncClock = syncClock + delta
+    if syncClock &gt;= 0.4 then syncClock = 0; broadcast() end
+end)
+</ProtectedString>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="RBX6">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+      <float name="CharacterWalkSpeed">0</float>
+      <float name="CharacterJumpPower">0</float>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="RBX7">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="RBX8">
+        <Properties>
+          <string name="Name">GameClient</string>
+          <ProtectedString name="Source">local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local player = Players.LocalPlayer
+local Config = require(ReplicatedStorage:WaitForChild("Config"))
+local api = ReplicatedStorage:WaitForChild("MysteriousAPI")
+local action, stateEvent, fxEvent = api:WaitForChild("Action"), api:WaitForChild("State"), api:WaitForChild("FX")
+local world = workspace:WaitForChild("MysteriousWorld")
+local selectedKind, selectedTower = 1, nil
+local latest, effects = nil, true
+local noticeVersion = 0
+local background = Color3.fromRGB(15, 22, 37)
+local muted = Color3.fromRGB(160, 176, 198)
+local accent = Color3.fromRGB(102, 238, 201)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AnimeMysterious"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = player:WaitForChild("PlayerGui")
+local root = Instance.new("Frame", gui)
+root.BackgroundTransparency = 1
+root.Size = UDim2.fromScale(1, 1)
+
+local function rounded(obj, radius)
+    local corner = Instance.new("UICorner", obj)
+    corner.CornerRadius = UDim.new(0, radius or 12)
+end
+local function panel(parent, size, position)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = size
+    frame.Position = position
+    frame.BackgroundColor3 = background
+    frame.BackgroundTransparency = 0.06
+    frame.BorderSizePixel = 0
+    rounded(frame)
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(66, 87, 110)
+    stroke.Transparency = 0.35
+    return frame
+end
+local function text(parent, value, size, pos, color, fontSize)
+    local item = Instance.new("TextLabel", parent)
+    item.Size = size
+    item.Position = pos
+    item.BackgroundTransparency = 1
+    item.Text = value
+    item.Font = Enum.Font.GothamMedium
+    item.TextSize = fontSize or 15
+    item.TextColor3 = color or Color3.new(1, 1, 1)
+    item.TextXAlignment = Enum.TextXAlignment.Left
+    item.TextWrapped = true
+    return item
+end
+local function button(parent, value, size, pos, callback, color)
+    local item = Instance.new("TextButton", parent)
+    item.Size = size
+    item.Position = pos
+    item.Text = value
+    item.TextColor3 = background
+    item.Font = Enum.Font.GothamBold
+    item.TextSize = 15
+    item.BackgroundColor3 = color or accent
+    item.BorderSizePixel = 0
+    rounded(item, 8)
+    item.Activated:Connect(callback)
+    return item
+end
+local header = panel(root, UDim2.fromOffset(670, 78), UDim2.new(0.5, 0, 0, 10))
+header.AnchorPoint = Vector2.new(0.5, 0)
+local headerScale = Instance.new("UIScale", header)
+text(header, "ANIME / MYSTERIOUS", UDim2.fromOffset(220, 24), UDim2.fromOffset(18, 9), accent, 16)
+local waveText = text(header, "LANTERN VALLEY  /  WAVE 0 OF 8", UDim2.fromOffset(370, 22), UDim2.fromOffset(18, 40), muted, 13)
+local healthText = text(header, "SHRINE  100 / 100", UDim2.fromOffset(200, 24), UDim2.fromOffset(440, 9), nil, 15)
+local healthTrack = panel(header, UDim2.fromOffset(200, 8), UDim2.fromOffset(440, 44))
+local healthFill = Instance.new("Frame", healthTrack)
+healthFill.Size = UDim2.fromScale(1, 1)
+healthFill.BackgroundColor3 = accent
+healthFill.BorderSizePixel = 0
+rounded(healthFill, 4)
+
+local controls = panel(root, UDim2.fromOffset(220, 160), UDim2.new(1, -16, 0, 112))
+controls.AnchorPoint = Vector2.new(1, 0)
+local controlsScale = Instance.new("UIScale", controls)
+local phaseText = text(controls, "BUILD YOUR DEFENSE", UDim2.fromOffset(196, 25), UDim2.fromOffset(12, 9), accent, 13)
+local aliveText = text(controls, "0 enemies alive", UDim2.fromOffset(196, 24), UDim2.fromOffset(12, 34), muted, 13)
+local startButton = button(controls, "START WAVE  [SPACE]", UDim2.fromOffset(196, 36), UDim2.fromOffset(12, 66), function()
+    action:FireServer(latest and (latest.phase == "VICTORY" or latest.phase == "DEFEAT") and "Restart" or "Start")
+end)
+local speedButton = button(controls, "SPEED  x1", UDim2.fromOffset(94, 32), UDim2.fromOffset(12, 113), function() action:FireServer("Speed") end, Color3.fromRGB(188, 205, 229))
+local fxButton = button(controls, "FX  ON", UDim2.fromOffset(94, 32), UDim2.fromOffset(114, 113), function()
+    effects = not effects
+end, Color3.fromRGB(188, 205, 229))
+
+local detail = panel(root, UDim2.fromOffset(258, 216), UDim2.new(0, 16, 0, 112))
+local detailScale = Instance.new("UIScale", detail)
+local detailTitle = text(detail, "YOUR FIRST DEFENSE", UDim2.fromOffset(230, 26), UDim2.fromOffset(14, 10), accent, 15)
+local detailBody = text(detail, "1  Choose a unit below\n2  Click a glowing numbered pad\n3  Start the wave\n\nClick a placed unit to upgrade.\nFrost slows. Astral hits groups.", UDim2.fromOffset(230, 126), UDim2.fromOffset(14, 39), muted, 14)
+local upgradeButton = button(detail, "UPGRADE", UDim2.fromOffset(144, 34), UDim2.fromOffset(12, 168), function()
+    if selectedTower then action:FireServer("Upgrade", selectedTower) end
+end)
+local sellButton = button(detail, "SELL", UDim2.fromOffset(80, 34), UDim2.fromOffset(166, 168), function()
+    if selectedTower then action:FireServer("Sell", selectedTower) end
+end, Color3.fromRGB(255, 155, 144))
+upgradeButton.Visible, sellButton.Visible = false, false
+
+local dock = panel(root, UDim2.fromOffset(690, 132), UDim2.new(0.5, 0, 1, -14))
+dock.AnchorPoint = Vector2.new(0.5, 1)
+local dockScale = Instance.new("UIScale", dock)
+local cashText = text(dock, "900 CREDITS", UDim2.fromOffset(330, 28), UDim2.fromOffset(14, 5), accent, 18)
+local capText = text(dock, "0 / 12 UNITS", UDim2.fromOffset(170, 28), UDim2.fromOffset(513, 5), muted, 13)
+local cards = {}
+for kind, unit in ipairs(Config.Units) do
+    local color = Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])
+    local b = button(dock, "", UDim2.fromOffset(214, 80), UDim2.fromOffset(14 + (kind - 1) * 224, 39), function()
+        selectedKind, selectedTower = kind, nil
+    end, Color3.fromRGB(35, 46, 65))
+    text(b, kind .. "  " .. unit.name, UDim2.fromOffset(194, 24), UDim2.fromOffset(10, 5), color, 15)
+    text(b, unit.role, UDim2.fromOffset(194, 18), UDim2.fromOffset(10, 30), muted, 10)
+    local price = text(b, unit.cost .. " CREDITS", UDim2.fromOffset(194, 22), UDim2.fromOffset(10, 51), nil, 14)
+    local stroke = Instance.new("UIStroke", b)
+    stroke.Color = color
+    stroke.Thickness = 2
+    cards[kind] = {button = b, stroke = stroke, price = price}
+end
+local notice = text(root, "Choose a unit, then click a numbered pad.  [Q] Cancel", UDim2.fromOffset(680, 42), UDim2.new(0.5, 0, 1, -159), Color3.new(1, 1, 1), 15)
+notice.AnchorPoint = Vector2.new(0.5, 1)
+notice.TextXAlignment = Enum.TextXAlignment.Center
+notice.TextStrokeTransparency = 0.3
+local noticeScale = Instance.new("UIScale", notice)
+local function notify(message)
+    noticeVersion = noticeVersion + 1
+    local version = noticeVersion
+    notice.Text = message
+    task.delay(4, function()
+        if version == noticeVersion then notice.Text = "Choose a unit, then click a numbered pad.  [Q] Cancel" end
+    end)
+end
+
+local rangePart = Instance.new("Part")
+rangePart.Name = "LocalRangeIndicator"
+rangePart.Shape = Enum.PartType.Cylinder
+rangePart.Anchored = true
+rangePart.CanCollide, rangePart.CanTouch, rangePart.CanQuery = false, false, false
+rangePart.Material = Enum.Material.Neon
+rangePart.Transparency = 0.9
+rangePart.Color = accent
+local function towerInfo(id)
+    if latest then for _, t in ipairs(latest.towers) do if t.id == id then return t end end end
+    return nil
+end
+local function padPart(padID)
+    return world.Pads:FindFirstChild("Pad_" .. padID)
+end
+local function showRange(position, radius, color)
+    rangePart.Size = Vector3.new(0.1, radius * 2, radius * 2)
+    rangePart.CFrame = CFrame.new(position.X, 1.55, position.Z) * CFrame.Angles(0, 0, math.pi / 2)
+    rangePart.Color = color
+    rangePart.Parent = workspace
+end
+local function hitAt(position)
+    local camera = workspace.CurrentCamera
+    local ray = camera:ScreenPointToRay(position.X, position.Y)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    params.FilterDescendantsInstances = {world.Pads, world.Towers}
+    return workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+end
+local function clicked(position)
+    local result = hitAt(position)
+    if not result then selectedTower = nil; return end
+    local hit = result.Instance
+    local model = hit:FindFirstAncestorOfClass("Model")
+    if model and model:GetAttribute("TowerID") then
+        selectedTower, selectedKind = model:GetAttribute("TowerID"), nil
+        return
+    end
+    local padID = hit:GetAttribute("PadID")
+    if padID then
+        if latest then
+            for _, t in ipairs(latest.towers) do
+                if t.pad == padID then selectedTower, selectedKind = t.id, nil; return end
+            end
+        end
+        if selectedKind then action:FireServer("Place", padID, selectedKind)
+        else notify("Choose a unit card first.") end
+    end
+end
+local touchStart = nil
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.UserInputType == Enum.UserInputType.Touch then touchStart = input.Position end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then clicked(input.Position) end
+    if input.KeyCode == Enum.KeyCode.One then selectedKind, selectedTower = 1, nil
+    elseif input.KeyCode == Enum.KeyCode.Two then selectedKind, selectedTower = 2, nil
+    elseif input.KeyCode == Enum.KeyCode.Three then selectedKind, selectedTower = 3, nil
+    elseif input.KeyCode == Enum.KeyCode.Q then selectedKind, selectedTower = nil, nil
+    elseif input.KeyCode == Enum.KeyCode.E and selectedTower then action:FireServer("Upgrade", selectedTower)
+    elseif input.KeyCode == Enum.KeyCode.X and selectedTower then action:FireServer("Sell", selectedTower)
+    elseif input.KeyCode == Enum.KeyCode.Space then action:FireServer("Start") end
+end)
+UserInputService.InputEnded:Connect(function(input, processed)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        if not processed and touchStart and (input.Position - touchStart).Magnitude &lt; 20 then clicked(input.Position) end
+        touchStart = nil
+    end
+end)
+stateEvent.OnClientEvent:Connect(function(state)
+    if state.notice then notify(state.notice); return end
+    latest = state
+    if selectedTower and not towerInfo(selectedTower) then selectedTower = nil end
+end)
+fxEvent.OnClientEvent:Connect(function(origin, target, kind)
+    if not effects then return end
+    local unit = Config.Units[kind]
+    local beam = Instance.new("Part")
+    beam.Name = "LocalShot"
+    beam.Anchored = true
+    beam.CanCollide, beam.CanTouch, beam.CanQuery = false, false, false
+    beam.Material = Enum.Material.Neon
+    beam.Color = Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])
+    beam.Size = Vector3.new(0.18, 0.18, (target - origin).Magnitude)
+    beam.CFrame = CFrame.lookAt((origin + target) / 2, target)
+    beam.Parent = workspace
+    TweenService:Create(beam, TweenInfo.new(0.16), {Transparency = 1}):Play()
+    Debris:AddItem(beam, 0.2)
+end)
+
+RunService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    local view = camera.ViewportSize
+    if view.Y &lt;= 0 then return end
+    local scale = math.min(1, view.X / 740, view.Y / 630)
+    headerScale.Scale, dockScale.Scale, noticeScale.Scale = scale, scale, scale
+    controlsScale.Scale, detailScale.Scale = scale, scale
+    controls.Position = UDim2.new(1, -12, 0, 20 + 82 * scale)
+    detail.Position = UDim2.new(0, 12, 0, 20 + 82 * scale)
+    notice.Position = UDim2.new(0.5, 0, 1, -20 - 132 * scale)
+    -- A full-board tactical camera keeps the route visible on portrait screens too.
+    camera.CameraType = Enum.CameraType.Scriptable
+    camera.FieldOfView = 55
+    local distance = math.max(135, 105 / (view.X / view.Y))
+    local focus = Vector3.new(0, 0, 0)
+    camera.CFrame = CFrame.lookAt(focus + Vector3.new(0, distance, distance * 0.72), focus)
+    rangePart.Parent = nil
+    local chosen = towerInfo(selectedTower)
+    if chosen then
+        local p = padPart(chosen.pad)
+        local unit = Config.Units[chosen.kind]
+        local stats = Config.stats(chosen.kind, chosen.level)
+        if p then showRange(p.Position, stats.range, Color3.fromRGB(unit.color[1], unit.color[2], unit.color[3])) end
+        detailTitle.Text = unit.name .. " / Lv." .. chosen.level
+        detailBody.Text = string.format("DAMAGE  %d      RANGE  %d\nINTERVAL  %.1fs\n%s\n\n%s", stats.damage, stats.range, stats.cooldown, unit.role, chosen.owner == player.UserId and "[E] Upgrade     [X] Sell (70%)" or "Owned by another player")
+        local owns = chosen.owner == player.UserId
+        upgradeButton.Visible, sellButton.Visible = owns, owns
+        upgradeButton.Text = stats.upgradeCost and ("UPGRADE  " .. stats.upgradeCost) or "MAX LEVEL"
+        sellButton.Text = "SELL " .. math.floor(Config.invested(chosen.kind, chosen.level) * Config.SellRatio)
+    else
+        upgradeButton.Visible, sellButton.Visible = false, false
+        detailTitle.Text = selectedKind and Config.Units[selectedKind].name or "YOUR DEFENSE"
+        detailBody.Text = "1  Choose a unit below\n2  Click a glowing numbered pad\n3  Start the wave\n\nFrost slows. Astral hits groups.\nUpgrade units for more damage."
+        if selectedKind and UserInputService.MouseEnabled then
+            local result = hitAt(UserInputService:GetMouseLocation())
+            if result and result.Instance:GetAttribute("PadID") then
+                local u = Config.Units[selectedKind]
+                showRange(result.Instance.Position, u.range, Color3.fromRGB(u.color[1], u.color[2], u.color[3]))
+            end
+        end
+    end
+    for kind, card in ipairs(cards) do
+        card.stroke.Transparency = selectedKind == kind and 0 or 0.85
+        card.price.TextColor3 = latest and latest.cash &lt; Config.Units[kind].cost and Color3.fromRGB(255, 145, 138) or Color3.new(1, 1, 1)
+    end
+    fxButton.Text = effects and "FX  ON" or "FX  OFF"
+    if not latest then return end
+    cashText.Text = latest.cash .. " CREDITS"
+    waveText.Text = string.format("LANTERN VALLEY  /  WAVE %d OF %d", latest.wave, Config.MaxWaves)
+    healthText.Text = string.format("SHRINE  %d / %d", latest.health, Config.BaseHealth)
+    healthFill.Size = UDim2.fromScale(latest.health / Config.BaseHealth, 1)
+    healthFill.BackgroundColor3 = latest.health &gt; 30 and accent or Color3.fromRGB(255, 110, 123)
+    local count = 0
+    for _, t in ipairs(latest.towers) do if t.owner == player.UserId then count = count + 1 end end
+    capText.Text = count .. " / " .. Config.MaxTowers .. " UNITS"
+    aliveText.Text = latest.alive .. " enemies alive"
+    speedButton.Text = "SPEED  x" .. latest.speed
+    local phase = latest.phase
+    phaseText.Text = phase == "BUILD" and "BUILD YOUR DEFENSE" or phase == "BREAK" and ("NEXT WAVE IN " .. latest.countdown .. "s") or phase == "VICTORY" and "VICTORY / SHRINE SAVED" or phase == "DEFEAT" and "DEFEAT / TRY A NEW PLAN" or "DEFEND THE SHRINE"
+    startButton.Text = (phase == "VICTORY" or phase == "DEFEAT") and string.format("REPLAY VOTE  %d / %d", latest.votes, latest.players) or phase == "WAVE" and "WAVE IN PROGRESS" or phase == "BREAK" and "NEXT WAVE NOW" or "START WAVE  [SPACE]"
+    startButton.BackgroundColor3 = phase == "WAVE" and muted or accent
+end)
+-- Connect listeners before requesting state so a fast server reply is not lost.
+action:FireServer("Sync")
+</ProtectedString>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="Lighting" referent="RBX9">
+    <Properties>
+      <string name="Name">Lighting</string>
+    </Properties>
+  </Item>
+</roblox>
